@@ -155,6 +155,22 @@ python py-xiaozhi.py
 - 动态会话管理
 
 ## 更新日志
+### v1.0.0-wtt
+✅
+逐步调试：                                                                                                                   
+                                                                                                                             
+  1. 读源码 — 对比 py-xiaozhi.py 和真实项目 mqtt_protocol.py、ota.py 找差异                                                    
+  2. 写测试脚本 — 不跑完整程序，单独测 OTA → MQTT → 消息流，每步看实际返回
+  3. 看报错改代码 — 每次运行暴露一个新问题，修一个再测，循环直到干净                                                           
+                                                                                                                             
+  遇到的坑按顺序：
+  - OTA 返回 缺少Device-Id → 发现需要同时传 Device-Id（MAC）和 Client-Id（UUID）
+  - MQTT 连接失败 → endpoint 是 "host:port" 字符串，需要解析，端口 1883 不能用 TLS
+  - 对话无响应 → 测试脚本抓到 MCP 握手流程，发现原脚本完全没处理 mcp 消息，服务端一直在等
+  - 'session_id' KeyError → try/except 没包住函数体（Python 语法写错了，try 后面没缩进）
+  - [Errno 56] Socket is already connected → 已 connect() 的 UDP socket 不能用 sendto(addr)，改 send()
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 ### v1.0.0
 
