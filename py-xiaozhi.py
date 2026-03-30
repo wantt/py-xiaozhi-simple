@@ -79,7 +79,7 @@ def get_or_create_device_id():
 # 获取设备唯一标识
 DEVICE_ID, MAC_ADDR = get_or_create_device_id()
 
-OTA_VERSION_URL = 'https://api.tenclass.net/xiaozhi/ota/'
+OTA_VERSION_URL = 'http://110.42.98.68:8989/xiaozhi/ota/'
 mqtt_info = {}
 aes_opus_info = {
     "type": "hello",
@@ -117,6 +117,7 @@ def get_ota_version():
     global mqtt_info
     header = {
         'Device-Id': MAC_ADDR,
+        'Client-Id': DEVICE_ID,
         'Content-Type': 'application/json'
     }
     post_data = {"flash_size": 16777216, "minimum_free_heap_size": 8318916, "mac_address": f"{MAC_ADDR}",
@@ -171,8 +172,8 @@ def send_audio():
     try:
         while True:
             if listen_state == "stop":
-                continue
                 time.sleep(0.1)
+                continue
             # 读取音频数据
             data = mic.read(960)
             # 编码音频数据
@@ -183,7 +184,7 @@ def send_audio():
             # 加密数据，添加nonce
             encrypt_encoded_data = aes_ctr_encrypt(bytes.fromhex(key), bytes.fromhex(new_nonce), bytes(encoded_data))
             data = bytes.fromhex(new_nonce) + encrypt_encoded_data
-            sent = udp_socket.sendto(data, (server_ip, server_port))
+            sent = udp_socket.send(data)
     except Exception as e:
         print(f"{COLORS['ERROR']}发送音频错误：{str(e)}{COLORS['RESET']}")
     finally:
@@ -229,52 +230,83 @@ def on_connect(client, userdata, flags, rs, pr):
         print(f"{COLORS['ERROR']}❌ MQTT服务器连接失败，错误码：{rs}{COLORS['RESET']}")
         return
     
-    # 订阅特定设备的主题
-    subscribe_topic = f"{mqtt_info['subscribe_topic'].split('/')[0]}/p2p/GID_test@@@{MAC_ADDR.replace(':', '_')}"
-    client.subscribe(subscribe_topic)
+    # 订阅服务器返回的主题（"null" 字符串表示无需订阅）
+    topic = mqtt_info.get('subscribe_topic')
+    if topic and topic != 'null':
+        client.subscribe(topic)
 
 
 def on_message(client, userdata, message):
     global aes_opus_info, udp_socket, tts_state, recv_audio_thread, send_audio_thread
-    msg = json.loads(message.payload)
-    
-    # 根据消息类型处理不同的显示效果
-    if msg['type'] == 'stt':
-        print(f"{COLORS['USER_INPUT']}{ICONS['RECOGNIZED']} 已识别：{msg['text']}{COLORS['RESET']}")
-    
-    elif msg['type'] == 'tts':
-        tts_state = msg['state']  # 更新tts状态
-        if msg['state'] == 'sentence_start':
-            # 如果消息中包含验证码,添加控制台链接和重启提示
-            if '验证码' in msg['text']:
-                print(f"{COLORS['AI_RESPONSE']}{ICONS['AI']} 小智：{msg['text']}{COLORS['RESET']}")
-                print(f"\n{COLORS['SYSTEM_STATUS']}📱 请访问控制台: https://xiaozhi.me/console/devices{COLORS['RESET']}")
-                print(f"{COLORS['SYSTEM_STATUS']}✨ 完成设备添加后,请重启程序{COLORS['RESET']}\n")
-            else:
-                print(f"{COLORS['AI_RESPONSE']}{ICONS['AI']} 小智：{msg['text']}{COLORS['RESET']}")
-        elif msg['state'] == 'start':
-            print(f"{COLORS['SYSTEM_STATUS']}{ICONS['PLAYING']} 开始播放{COLORS['RESET']}")
-        elif msg['state'] == 'stop':
-            print(f"{COLORS['SYSTEM_STATUS']}{ICONS['PAUSED']} 播放结束{COLORS['RESET']}")
-    
-    elif msg['type'] == 'llm':
-        if 'emotion' in msg:
-            print(f"{COLORS['AI_RESPONSE']}{msg['text']} ({msg['emotion']}){COLORS['RESET']}")
-    
-    elif msg['type'] == 'hello':
-        aes_opus_info = msg
-        udp_socket.connect((msg['udp']['server'], msg['udp']['port']))
-        
-        if not recv_audio_thread.is_alive():
-            recv_audio_thread = threading.Thread(target=recv_audio)
-            recv_audio_thread.start()
-        
-        if not send_audio_thread.is_alive():
-            send_audio_thread = threading.Thread(target=send_audio)
-            send_audio_thread.start()
-    
-    elif msg['type'] == 'goodbye' and udp_socket and msg['session_id'] == aes_opus_info['session_id']:
-        aes_opus_info['session_id'] = None
+    try:
+        msg = json.loads(message.payload)
+
+        # 根据消息类型处理不同的显示效果
+        if msg['type'] == 'stt':
+            print(f"{COLORS['USER_INPUT']}{ICONS['RECOGNIZED']} 已识别：{msg['text']}{COLORS['RESET']}")
+
+        elif msg['type'] == 'tts':
+            tts_state = msg['state']  # 更新tts状态
+            if msg['state'] == 'sentence_start':
+                # 如果消息中包含验证码,添加控制台链接和重启提示
+                if '验证码' in msg['text']:
+                    print(f"{COLORS['AI_RESPONSE']}{ICONS['AI']} 小智：{msg['text']}{COLORS['RESET']}")
+                    print(f"\n{COLORS['SYSTEM_STATUS']}📱 请访问控制台: https://xiaozhi.me/console/devices{COLORS['RESET']}")
+                    print(f"{COLORS['SYSTEM_STATUS']}✨ 完成设备添加后,请重启程序{COLORS['RESET']}\n")
+                else:
+                    print(f"{COLORS['AI_RESPONSE']}{ICONS['AI']} 小智：{msg['text']}{COLORS['RESET']}")
+            elif msg['state'] == 'start':
+                print(f"{COLORS['SYSTEM_STATUS']}{ICONS['PLAYING']} 开始播放{COLORS['RESET']}")
+            elif msg['state'] == 'stop':
+                print(f"{COLORS['SYSTEM_STATUS']}{ICONS['PAUSED']} 播放结束{COLORS['RESET']}")
+
+        elif msg['type'] == 'llm':
+            if 'emotion' in msg:
+                print(f"{COLORS['AI_RESPONSE']}{msg['text']} ({msg['emotion']}){COLORS['RESET']}")
+
+        elif msg['type'] == 'hello':
+            aes_opus_info = msg
+            # 重建 UDP socket（避免 "already connected" 错误）
+            try:
+                udp_socket.close()
+            except Exception:
+                pass
+            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_socket.connect((msg['udp']['server'], msg['udp']['port']))
+
+            if not recv_audio_thread.is_alive():
+                recv_audio_thread = threading.Thread(target=recv_audio)
+                recv_audio_thread.start()
+
+            if not send_audio_thread.is_alive():
+                send_audio_thread = threading.Thread(target=send_audio)
+                send_audio_thread.start()
+
+        elif msg['type'] == 'goodbye' and udp_socket and msg.get('session_id') == aes_opus_info.get('session_id'):
+            aes_opus_info['session_id'] = None
+
+        elif msg['type'] == 'mcp':
+            payload = msg.get('payload', {})
+            method = payload.get('method')
+            msg_id = payload.get('id')
+            # 响应 initialize
+            if method == 'initialize':
+                reply = {"type": "mcp", "payload": {
+                    "jsonrpc": "2.0", "id": msg_id,
+                    "result": {"protocolVersion": "2024-11-05", "capabilities": {},
+                               "serverInfo": {"name": "py-xiaozhi", "version": "1.0.0"}}}}
+                push_mqtt_msg(reply)
+                notif = {"type": "mcp", "payload": {"jsonrpc": "2.0", "method": "notifications/initialized"}}
+                push_mqtt_msg(notif)
+            # 响应 tools/list（返回空列表）
+            elif method == 'tools/list':
+                reply = {"type": "mcp", "payload": {
+                    "jsonrpc": "2.0", "id": msg_id,
+                    "result": {"tools": []}}}
+                push_mqtt_msg(reply)
+
+    except Exception as e:
+        print(f"{COLORS['ERROR']}消息处理错误：{str(e)}{COLORS['RESET']}")
 
 
 def push_mqtt_msg(message):
@@ -294,6 +326,7 @@ def on_space_key_press(event):
         conn_state = True
         # 发送hello消息,建立udp连接
         hello_msg = {"type": "hello", "version": 3, "transport": "udp",
+                     "features": {"mcp": True},
                      "audio_params": {"format": "opus", "sample_rate": 16000, "channels": 1, "frame_duration": 60}}
         push_mqtt_msg(hello_msg)
         print(f"{COLORS['SYSTEM_STATUS']}正在重新建立连接...{COLORS['RESET']}")
@@ -363,15 +396,26 @@ def run():
         listener.start()
         
         # 创建MQTT客户端
+        # 解析 endpoint，格式可能为 "host:port" 或 "host"
+        endpoint = mqtt_info['endpoint']
+        if ':' in endpoint:
+            mqtt_host, mqtt_port = endpoint.rsplit(':', 1)
+            mqtt_port = int(mqtt_port)
+        else:
+            mqtt_host = endpoint
+            mqtt_port = 8883
+        use_tls = mqtt_port == 8883
+
         mqttc = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=mqtt_info['client_id'])
         mqttc.username_pw_set(username=mqtt_info['username'], password=mqtt_info['password'])
-        mqttc.tls_set(ca_certs=None, certfile=None, keyfile=None, cert_reqs=mqtt.ssl.CERT_REQUIRED,
-                      tls_version=mqtt.ssl.PROTOCOL_TLS, ciphers=None)
+        if use_tls:
+            mqttc.tls_set(ca_certs=None, certfile=None, keyfile=None, cert_reqs=mqtt.ssl.CERT_REQUIRED,
+                          tls_version=mqtt.ssl.PROTOCOL_TLS, ciphers=None)
         mqttc.on_connect = on_connect
         mqttc.on_message = on_message
-        
+
         try:
-            mqttc.connect(host=mqtt_info['endpoint'], port=8883)
+            mqttc.connect(host=mqtt_host, port=mqtt_port)
             mqttc.loop_forever()
         except Exception as e:
             print(f"{COLORS['ERROR']}MQTT连接错误：{str(e)}{COLORS['RESET']}")
